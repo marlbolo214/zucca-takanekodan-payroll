@@ -29,6 +29,7 @@ button.secondary{background:#374151}button.light{background:#eef2ff;color:#312e8
 .paygrid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:14px}
 .paybox{padding:11px;border-radius:13px}.paybox small{display:block;font-size:11px;margin-bottom:4px}.paybox b{font-size:16px}
 .base{background:var(--blue);color:#1d4ed8}.ot{background:var(--orange);color:#c2410c}.night{background:var(--violet);color:#6d28d9}.transport{background:var(--green);color:#15803d}
+.taxbox{margin-top:12px;padding:12px;border:1px solid #d1d5db;border-radius:13px;background:#fff}.taxbox .taxrow{display:grid;grid-template-columns:1fr 1fr;gap:10px}.taxbox label{font-size:12px;color:#6b7280}.deduct{background:#fef2f2;color:#b91c1c}.net{background:#ecfdf5;color:#047857}
 .formula{margin-top:12px;background:#f8fafc;border-radius:11px;padding:10px;font-size:12px;line-height:1.55;color:#4b5563}
 .tw{overflow:auto}table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:13px}
 th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:right}th:first-child,td:first-child{text-align:left}
@@ -67,7 +68,7 @@ th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:right}th:fi
 </style>
 </head>
 <body>
-<div class="top"><h1>高根公団ZUCCA 給与明細</h1><p>高根公団専用・勤怠クラウド連動・21日〜翌20日</p></div>
+<div class="top"><h1>高根公団ZUCCA 給与明細</h1><p>勤怠クラウド連動・21日〜翌20日</p></div>
 <div class="wrap">
 
 <div class="card no-print" id="loginCard">
@@ -114,6 +115,18 @@ th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:right}th:fi
       <div class="paybox transport"><small>交通費</small><b id="transportPay">¥0</b></div>
     </div>
 
+    <div class="taxbox no-print">
+      <b>源泉所得税設定（令和8年分・月額表）</b>
+      <div class="taxrow" style="margin-top:10px">
+        <div><label>区分</label><select id="taxClass"><option value="甲">甲</option><option value="乙">乙</option></select></div>
+        <div id="dependentsWrap"><label>扶養親族等の数</label><select id="dependents"><option value="0">0人</option><option value="1">1人</option><option value="2">2人</option><option value="3">3人</option><option value="4">4人</option><option value="5">5人</option><option value="6">6人</option><option value="7">7人</option></select></div>
+      </div>
+      <p class="note">甲：扶養控除等申告書を提出している人／乙：その他。設定はこの端末にスタッフごと保存します。</p>
+    </div>
+    <div class="paygrid" style="grid-template-columns:1fr 1fr;margin-top:10px">
+      <div class="paybox deduct"><small>源泉所得税</small><b id="withholdingTax">¥0</b></div>
+      <div class="paybox net"><small>差引支給額</small><b id="netPay">¥0</b></div>
+    </div>
     <div id="formula" class="formula"></div>
 
     <h3 style="font-size:16px;margin:18px 0 7px">日別明細</h3>
@@ -142,6 +155,7 @@ th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:right}th:fi
 <div id="bulkPrint" class="bulkPrint"></div>
 
 <script>
+// ZUCCA Payroll v5 2026 withholding tax (甲/乙 + dependents), no insurance deductions
 const SUPABASE_URL='https://nahlnkatdmqinzaskbbp.supabase.co';
 const SUPABASE_KEY='sb_publishable_SNf2lIkK9A5hffq6hHawjw_mogl4wgt';
 let session=null,attendance=[],staffRows=[];
@@ -258,6 +272,28 @@ function fillStaff(){
 
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 
+const TAX_SETTINGS_KEY='zucca_payroll_tax_settings_2026';
+function taxSettings(){try{return JSON.parse(localStorage.getItem(TAX_SETTINGS_KEY)||'{}')}catch(e){return {}}}
+function taxSetting(name){let x=taxSettings()[name]||{};return {taxClass:x.taxClass==='乙'?'乙':'甲',dependents:Math.max(0,Math.min(7,Number(x.dependents)||0))}}
+function saveTaxSetting(name,taxClass,dependents){let x=taxSettings();x[name]={taxClass:taxClass==='乙'?'乙':'甲',dependents:Math.max(0,Math.min(7,Number(dependents)||0))};localStorage.setItem(TAX_SETTINGS_KEY,JSON.stringify(x))}
+function salaryDeduction(A){if(A<=158333)return 54167;if(A<=299999)return Math.ceil(A*.30+6667);if(A<=549999)return Math.ceil(A*.20+36667);if(A<=708330)return Math.ceil(A*.10+91667);return 162500}
+function basicDeduction(A){if(A<=2120833)return 48334;if(A<=2162499)return 40000;if(A<=2204166)return 26667;if(A<=2245833)return 13334;return 0}
+function incomeTaxBase(B,withReconstruction){B=Math.max(0,B);let rate=0,ded=0;if(B<=162500){rate=.05}else if(B<=275000){rate=.10;ded=8125}else if(B<=579166){rate=.20;ded=35625}else if(B<=750000){rate=.23;ded=53000}else if(B<=1500000){rate=.33;ded=128000}else if(B<=3333333){rate=.40;ded=233000}else{rate=.45;ded=399666.5}let t=Math.max(0,B*rate-ded);return withReconstruction?t*1.021:t}
+function round100Tax(n){let r=n%100;return Math.floor(n/100)*100+(r>=50?100:0)}
+function withholdingTax2026(amount,taxClass,dependents){
+  let A=Math.max(0,Math.floor(amount||0));
+  if(taxClass==='乙'){
+    if(A<105000)return Math.floor(A*.03063);
+    if(A>740000){if(A<1710000)return Math.floor(259200+(A-740000)*.4084);return Math.floor(655400+(A-1710000)*.45945)}
+    let step=A<=220999?2000:3000,min=A<=220999?105000:221000;
+    let base=A===740000?740000:A-((A-min)%step);
+    function part(mult){let X=base*mult;let B=Math.max(0,X-salaryDeduction(X)-basicDeduction(X));return Math.floor(incomeTaxBase(B,false))}
+    return round100Tax(round100Tax(part(2.5)-part(1.5))*1.021);
+  }
+  let B=Math.max(0,A-salaryDeduction(A)-basicDeduction(A)-31667*Math.max(0,Math.min(7,Number(dependents)||0)));
+  let t=incomeTaxBase(B,true);
+  return Math.max(0,Math.round(t/10)*10);
+}
 function summarize(name){
   let staff=staffRows.find(s=>s.name===name)||{hourly_wage:0,transport_per_day:0};
   let [start,end]=periodFromMonth($('periodMonth').value);
@@ -279,8 +315,12 @@ function summarize(name){
   let nightPremium=tot[3]/60*wage*.25;
   let transport=days*transportPerDay;
   let total=base+otPremium+nightPremium+transport;
+  let taxablePay=base+otPremium+nightPremium; // 通勤手当は源泉税計算から除外（他の保険控除なし）
+  let ts=taxSetting(name);
+  let withholdingTax=withholdingTax2026(taxablePay,ts.taxClass,ts.dependents);
+  let netPay=total-withholdingTax;
 
-  return {name,staff,start,end,daily,days,tot,wage,transportPerDay,base,otPremium,nightPremium,transport,total};
+  return {name,staff,start,end,daily,days,tot,wage,transportPerDay,base,otPremium,nightPremium,transport,total,taxablePay,taxClass:ts.taxClass,dependents:ts.dependents,withholdingTax,netPay};
 }
 
 function render(){
@@ -301,7 +341,9 @@ function render(){
   $('otPay').textContent=yen(s.otPremium);
   $('nightPay').textContent=yen(s.nightPremium);
   $('transportPay').textContent=yen(s.transport);
-  $('formula').innerHTML='基本分 '+yen(s.base)+' ＋ 残業割増 '+yen(s.otPremium)+' ＋ 深夜割増 '+yen(s.nightPremium)+' ＋ 交通費 '+yen(s.transport)+' ＝ <b>'+yen(s.total)+'</b>';
+  $('taxClass').value=s.taxClass;$('dependents').value=String(s.dependents);$('dependentsWrap').style.display=s.taxClass==='甲'?'block':'none';
+  $('withholdingTax').textContent=yen(s.withholdingTax);$('netPay').textContent=yen(s.netPay);
+  $('formula').innerHTML='基本分 '+yen(s.base)+' ＋ 残業割増 '+yen(s.otPremium)+' ＋ 深夜割増 '+yen(s.nightPremium)+' ＋ 交通費 '+yen(s.transport)+' ＝ <b>'+yen(s.total)+'</b><br>源泉所得税 '+yen(s.withholdingTax)+'（'+s.taxClass+(s.taxClass==='甲'?'・扶養親族等 '+s.dependents+'人':'')+'） → 差引支給額 <b>'+yen(s.netPay)+'</b>';
 
   $('dailyBody').innerHTML=s.daily.map(d=>{
     let c=d.calc;
@@ -320,7 +362,7 @@ function renderAllStaff(){
     let s=summarize(st.name);
     return '<button type="button" class="staffItem" data-name="'+esc(st.name)+'" style="width:100%;background:#fff;color:#111827;text-align:left">'+
       '<div><div class="name">'+esc(st.name)+'</div><div class="sub">'+s.days+'日 / 実働 '+fmt(s.tot[0])+' / 交通費 '+yen(s.transport)+'</div></div>'+
-      '<div class="amt">'+yen(s.total)+'</div></button>';
+      '<div class="amt">'+yen(s.netPay)+'</div></button>';
   }).join('');
   document.querySelectorAll('.staffItem').forEach(btn=>btn.addEventListener('click',()=>{
     $('staffSelect').value=btn.dataset.name;render();window.scrollTo({top:0,behavior:'smooth'});
@@ -332,7 +374,7 @@ function bulkSlipHTML(s){
   return '<section class="bulkSlip">'+
     '<div class="bulkHead">'+
       '<div><div class="bulkBrand">高根公団ZUCCA 給与明細</div><div class="bulkName">'+esc(s.name)+'</div><div class="bulkPeriod">'+iso(s.start)+' ～ '+iso(s.end)+'</div></div>'+
-      '<div class="bulkTotal"><small>支給額（交通費込み）</small><b>'+yen(s.total)+'</b></div>'+
+      '<div class="bulkTotal"><small>差引支給額</small><b>'+yen(s.netPay)+'</b></div>'+
     '</div>'+
     '<div class="bulkStats">'+
       '<div class="bulkStat"><small>出勤日数</small><b>'+s.days+'日</b></div>'+
@@ -348,8 +390,10 @@ function bulkSlipHTML(s){
       '<tr><td>深夜割増（+25%）</td><td>'+yen(s.nightPremium)+'</td></tr>'+
       '<tr><td>交通費（'+s.days+'日 × '+yen(s.transportPerDay)+'）</td><td>'+yen(s.transport)+'</td></tr>'+
       '<tr><td>支給額</td><td>'+yen(s.total)+'</td></tr>'+
+      '<tr><td>源泉所得税（'+s.taxClass+(s.taxClass==='甲'?'・扶養 '+s.dependents+'人':'')+'）</td><td>▲'+yen(s.withholdingTax)+'</td></tr>'+
+      '<tr><td>差引支給額</td><td>'+yen(s.netPay)+'</td></tr>'+
     '</table>'+
-    '<div class="bulkNote">対象期間：毎月21日～翌20日 / ZUCCA</div>'+
+    '<div class="bulkNote">対象期間：毎月21日～翌20日 / 高根公団ZUCCA</div>'+
   '</section>';
 }
 
@@ -416,7 +460,7 @@ async function printFourUp(){
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-    <title>高根公団ZUCCA 4人給与明細</title>
+    <title>ZUCCA 4人給与明細</title>
     <style>
       *{box-sizing:border-box}
       html,body{margin:0;padding:0;background:#eee;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:#111827}
@@ -480,7 +524,11 @@ function csv(){
     ['残業割増',Math.round(s.otPremium)],
     ['深夜割増',Math.round(s.nightPremium)],
     ['交通費',Math.round(s.transport)],
-    ['支給額',Math.round(s.total)]
+    ['支給額',Math.round(s.total)],
+    ['源泉区分',s.taxClass],
+    ['扶養親族等の数',s.taxClass==='甲'?s.dependents:''],
+    ['源泉所得税',Math.round(s.withholdingTax)],
+    ['差引支給額',Math.round(s.netPay)]
   ];
   let body='\ufeff'+lines.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
   let blob=new Blob([body],{type:'text/csv;charset=utf-8'});
@@ -495,6 +543,9 @@ $('periodMonth').addEventListener('change',render);
 $('printBtn').addEventListener('click',()=>{document.body.classList.remove('bulk-mode');window.print()});
 $('bulkPrintBtn').addEventListener('click',printFourUp);
 $('csvBtn').addEventListener('click',csv);
+$('taxClass').addEventListener('change',()=>{let n=$('staffSelect').value;saveTaxSetting(n,$('taxClass').value,$('dependents').value);render()});
+$('dependents').addEventListener('change',()=>{let n=$('staffSelect').value;saveTaxSetting(n,$('taxClass').value,$('dependents').value);render()});
+
 </script>
 </body>
 </html>
