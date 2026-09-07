@@ -110,6 +110,24 @@ th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:right}th:fi
 }
 </style>
 
+
+<style>
+/* v6 源泉所得税・差引支給額 */
+.taxSetup{margin-top:12px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px}
+.taxSetupTitle{font-weight:900;margin-bottom:8px}
+.taxSetupGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.taxSetup label{font-size:11px;color:#64748b;display:block}
+.taxSetup select,.taxSetup input{margin-top:4px}
+.deductionGrid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px}
+.deductionBox{padding:12px;border-radius:13px}
+.deductionBox small{display:block;font-size:11px;margin-bottom:4px}
+.deductionBox b{font-size:19px}
+.taxBox{background:#fff1f2;color:#be123c}
+.netBox{background:#ecfdf5;color:#047857}
+.taxMeta{margin-top:8px;font-size:11px;color:#64748b}
+@media(max-width:640px){.taxSetupGrid,.deductionGrid{grid-template-columns:1fr 1fr}}
+</style>
+
 </head>
 <body>
 <div class="top"><h1>高根公団ZUCCA 給与明細</h1><p>高根公団専用・勤怠クラウド連動・21日〜翌20日</p></div>
@@ -135,6 +153,24 @@ th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:right}th:fi
       <button id="reloadBtn">再読込</button>
     </div>
     <p id="syncStatus" class="note"></p><p class="note">時間表示：小数（例 6時間15分＝6.25）</p>
+
+    <div class="taxSetup">
+      <div class="taxSetupTitle">源泉所得税設定</div>
+      <div class="taxSetupGrid">
+        <label>源泉徴収区分
+          <select id="taxClass">
+            <option value="kou">甲欄</option>
+            <option value="otsu">乙欄</option>
+          </select>
+        </label>
+        <label id="dependentsWrap">扶養人数
+          <input id="dependents" type="number" min="0" max="7" step="1" value="0">
+        </label>
+      </div>
+      <div id="taxSettingStatus" class="note" style="margin-top:8px"></div>
+      <div class="note">2026年分。設定はこの端末に保存します。交通費は源泉所得税の課税対象額から除外して計算します。</div>
+    </div>
+
   </div>
 
   <div class="card" id="statement">
@@ -160,6 +196,13 @@ th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:right}th:fi
     </div>
 
     <div id="formula" class="formula"></div>
+
+    <div class="deductionGrid">
+      <div class="deductionBox taxBox"><small id="taxLabel">源泉所得税</small><b id="withholdingPay">¥0</b></div>
+      <div class="deductionBox netBox"><small>差引支給額</small><b id="netPay">¥0</b></div>
+    </div>
+    <div id="taxMeta" class="taxMeta"></div>
+
 
     <h3 style="font-size:16px;margin:18px 0 7px">日別明細</h3>
     <p class="note">時間は小数表記です（15分＝0.25／30分＝0.50／45分＝0.75）。勤務時間は給与計算に使用する丸め後の時刻です。</p>
@@ -197,6 +240,99 @@ const $=id=>document.getElementById(id);
 const yen=n=>'¥'+Math.round(Number(n)||0).toLocaleString('ja-JP');
 const fmt=n=>{n=Math.max(0,Math.round(Number(n)||0));return (n/60).toFixed(2)};
 const mins=t=>{let [h,m]=String(t||'00:00').slice(0,5).split(':').map(Number);return h*60+m};
+
+
+const TAX_STORAGE_KEY='takanekodan_payroll_tax_settings_v1';
+
+function salaryDeduction2026(A){
+  if(A<=158333)return 54167;
+  if(A<=299999)return Math.ceil(A*.30+6667);
+  if(A<=549999)return Math.ceil(A*.20+36667);
+  if(A<=708330)return Math.ceil(A*.10+91667);
+  return 162500;
+}
+function basicDeduction2026(A){
+  if(A<=2120833)return 48334;
+  if(A<=2162499)return 40000;
+  if(A<=2204166)return 26667;
+  if(A<=2245833)return 13334;
+  return 0;
+}
+function incomeTaxBase2026(B,withReconstruction){
+  B=Math.max(0,B);
+  let rate=0,ded=0;
+  if(B<=162500){rate=.05}
+  else if(B<=275000){rate=.10;ded=8125}
+  else if(B<=579166){rate=.20;ded=35625}
+  else if(B<=750000){rate=.23;ded=53000}
+  else if(B<=1500000){rate=.33;ded=128000}
+  else if(B<=3333333){rate=.40;ded=233000}
+  else{rate=.45;ded=399666.5}
+  let t=Math.max(0,B*rate-ded);
+  return withReconstruction?t*1.021:t;
+}
+function round100Tax2026(n){
+  let r=n%100;
+  return Math.floor(n/100)*100+(r>=50?100:0);
+}
+function withholdingTax2026(amount,taxClass,dependents){
+  let A=Math.max(0,Math.floor(amount||0));
+  const tc=taxClass==='otsu'||taxClass==='乙'?'乙':'甲';
+  if(tc==='乙'){
+    if(A<105000)return Math.floor(A*.03063);
+    if(A>740000){
+      if(A<1710000)return Math.floor(259200+(A-740000)*.4084);
+      return Math.floor(655400+(A-1710000)*.45945);
+    }
+    let step=A<=220999?2000:3000,min=A<=220999?105000:221000;
+    let base=A===740000?740000:A-((A-min)%step);
+    function part(mult){
+      let X=base*mult;
+      let B=Math.max(0,X-salaryDeduction2026(X)-basicDeduction2026(X));
+      return Math.floor(incomeTaxBase2026(B,false));
+    }
+    return round100Tax2026(round100Tax2026(part(2.5)-part(1.5))*1.021);
+  }
+  let dep=Math.max(0,Math.min(7,Number(dependents)||0));
+  let B=Math.max(0,A-salaryDeduction2026(A)-basicDeduction2026(A)-31667*dep);
+  let t=incomeTaxBase2026(B,true);
+  return Math.max(0,Math.round(t/10)*10);
+}
+function readTaxSettings(){
+  try{return JSON.parse(localStorage.getItem(TAX_STORAGE_KEY)||'{}')||{}}
+  catch(e){return {}}
+}
+function taxSettingFor(name){
+  let all=readTaxSettings(),v=all[name]||{};
+  return {taxClass:v.taxClass==='otsu'?'otsu':'kou',dependents:Math.max(0,Math.min(7,Number(v.dependents)||0))};
+}
+function saveTaxSetting(name,taxClass,dependents){
+  if(!name)return;
+  let all=readTaxSettings();
+  all[name]={
+    taxClass:taxClass==='otsu'?'otsu':'kou',
+    dependents:Math.max(0,Math.min(7,Number(dependents)||0))
+  };
+  localStorage.setItem(TAX_STORAGE_KEY,JSON.stringify(all));
+}
+function loadTaxControls(){
+  const name=$('staffSelect')?.value;
+  if(!name||!$('taxClass'))return;
+  const v=taxSettingFor(name);
+  $('taxClass').value=v.taxClass;
+  $('dependents').value=v.dependents;
+  $('dependentsWrap').style.opacity=v.taxClass==='otsu'?'.45':'1';
+  $('dependents').disabled=v.taxClass==='otsu';
+  $('taxSettingStatus').textContent='この端末に保存：'+(v.taxClass==='otsu'?'乙欄':'甲欄・扶養'+v.dependents+'人');
+}
+function storeTaxControls(){
+  const name=$('staffSelect')?.value;
+  if(!name)return;
+  saveTaxSetting(name,$('taxClass').value,$('dependents').value);
+  loadTaxControls();
+  render();
+}
+
 
 function roundPunchTime(kind,time){
   if(!time)return time;
@@ -329,6 +465,7 @@ function fillStaff(){
   let keep=$('staffSelect').value;
   $('staffSelect').innerHTML=staffRows.map(s=>'<option value="'+esc(s.name)+'">'+esc(s.name)+'</option>').join('');
   if(keep&&staffRows.some(s=>s.name===keep))$('staffSelect').value=keep;
+  loadTaxControls();
 }
 
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -354,8 +491,13 @@ function summarize(name){
   let nightPremium=tot[3]/60*wage*.25;
   let transport=days*transportPerDay;
   let total=base+otPremium+nightPremium+transport;
+  let taxCfg=taxSettingFor(name);
+  let taxable=Math.max(0,total-transport);
+  let withholding=withholdingTax2026(taxable,taxCfg.taxClass,taxCfg.dependents);
+  let net=Math.max(0,total-withholding);
 
-  return {name,staff,start,end,daily,days,tot,wage,transportPerDay,base,otPremium,nightPremium,transport,total};
+  return {name,staff,start,end,daily,days,tot,wage,transportPerDay,base,otPremium,nightPremium,transport,total,
+    taxable,withholding,net,taxClass:taxCfg.taxClass,dependents:taxCfg.dependents};
 }
 
 function render(){
@@ -377,6 +519,11 @@ function render(){
   $('nightPay').textContent=yen(s.nightPremium);
   $('transportPay').textContent=yen(s.transport);
   $('formula').innerHTML='基本分 '+yen(s.base)+' ＋ 残業割増 '+yen(s.otPremium)+' ＋ 深夜割増 '+yen(s.nightPremium)+' ＋ 交通費 '+yen(s.transport)+' ＝ <b>'+yen(s.total)+'</b>';
+  $('withholdingPay').textContent='▲'+yen(s.withholding);
+  $('netPay').textContent=yen(s.net);
+  $('taxLabel').textContent='源泉所得税（'+(s.taxClass==='otsu'?'乙欄':'甲欄')+'）';
+  $('taxMeta').textContent='課税対象額 '+yen(s.taxable)+' ／ '+(s.taxClass==='otsu'?'乙欄':'甲欄・扶養'+s.dependents+'人')+' ／ 2026年分';
+
 
   $('dailyBody').innerHTML=s.daily.map(d=>{
     let c=d.calc;
@@ -411,8 +558,8 @@ function renderAllStaff(){
   $('staffList').innerHTML=staffRows.map(st=>{
     let s=summarize(st.name);
     return '<button type="button" class="staffItem" data-name="'+esc(st.name)+'" style="width:100%;background:#fff;color:#111827;text-align:left">'+
-      '<div><div class="name">'+esc(st.name)+'</div><div class="sub">'+s.days+'日 / 実働 '+fmt(s.tot[0])+' / 交通費 '+yen(s.transport)+'</div></div>'+
-      '<div class="amt">'+yen(s.total)+'</div></button>';
+      '<div><div class="name">'+esc(st.name)+'</div><div class="sub">'+s.days+'日 / 実働 '+fmt(s.tot[0])+' / 源泉 '+yen(s.withholding)+'</div></div>'+
+      '<div class="amt">'+yen(s.net)+'</div></button>';
   }).join('');
   document.querySelectorAll('.staffItem').forEach(btn=>btn.addEventListener('click',()=>{
     $('staffSelect').value=btn.dataset.name;render();window.scrollTo({top:0,behavior:'smooth'});
@@ -440,6 +587,8 @@ function bulkSlipHTML(s){
       '<tr><td>深夜割増（+25%）</td><td>'+yen(s.nightPremium)+'</td></tr>'+
       '<tr><td>交通費（'+s.days+'日 × '+yen(s.transportPerDay)+'）</td><td>'+yen(s.transport)+'</td></tr>'+
       '<tr><td>支給額</td><td>'+yen(s.total)+'</td></tr>'+
+      '<tr><td>源泉所得税（'+(s.taxClass==='otsu'?'乙欄':'甲欄・扶養'+s.dependents+'人')+'）</td><td>▲'+yen(s.withholding)+'</td></tr>'+
+      '<tr><td>差引支給額</td><td>'+yen(s.net)+'</td></tr>'+
     '</table>'+
     '<div class="bulkNote">対象期間：毎月21日～翌20日 / ZUCCA</div>'+
   '</section>';
@@ -491,7 +640,9 @@ async function printFourUp(){
           <tr><td>残業割増</td><td>${yen(s.otPremium)}</td></tr>
           <tr><td>深夜割増</td><td>${yen(s.nightPremium)}</td></tr>
           <tr><td>交通費</td><td>${yen(s.transport)}</td></tr>
-          <tr class="grand"><td>支給額</td><td>${yen(s.total)}</td></tr>
+          <tr><td>支給額</td><td>${yen(s.total)}</td></tr>
+          <tr><td>源泉所得税（${s.taxClass==='otsu'?'乙欄':'甲欄・扶養'+s.dependents+'人'}）</td><td>▲${yen(s.withholding)}</td></tr>
+          <tr class="grand"><td>差引支給額</td><td>${yen(s.net)}</td></tr>
         </table>
       </div>`;
   }
@@ -537,7 +688,7 @@ async function printFourUp(){
         .wrap{padding:0;overflow:visible}
         .sheet{width:210mm!important;height:297mm!important;transform:none!important;margin:0!important;padding:8mm!important;gap:6mm!important}
         .slip{border-radius:3mm;padding:4.5mm}
-        .name{font-size:18px}.total b{font-size:19px}.stats b{font-size:11px}table{font-size:9px}
+        .name{font-size:18px}.total b{font-size:19px}.stats b{font-size:11px}table{font-size:8.5px}
       }
     </style>
   </head>
@@ -572,7 +723,12 @@ function csv(){
     ['残業割増',Math.round(s.otPremium)],
     ['深夜割増',Math.round(s.nightPremium)],
     ['交通費',Math.round(s.transport)],
-    ['支給額',Math.round(s.total)]
+    ['支給額',Math.round(s.total)],
+    ['課税対象額',Math.round(s.taxable)],
+    ['源泉徴収区分',s.taxClass==='otsu'?'乙欄':'甲欄'],
+    ['扶養人数',s.taxClass==='otsu'?'':s.dependents],
+    ['源泉所得税',Math.round(s.withholding)],
+    ['差引支給額',Math.round(s.net)]
   ];
   let body='\ufeff'+lines.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
   let blob=new Blob([body],{type:'text/csv;charset=utf-8'});
@@ -582,7 +738,9 @@ function csv(){
 $('periodMonth').value=currentStartMonth();
 $('loginBtn').addEventListener('click',login);
 $('reloadBtn').addEventListener('click',loadCloud);
-$('staffSelect').addEventListener('change',render);
+$('staffSelect').addEventListener('change',()=>{loadTaxControls();render()});
+$('taxClass').addEventListener('change',storeTaxControls);
+$('dependents').addEventListener('change',storeTaxControls);
 $('periodMonth').addEventListener('change',render);
 $('printBtn').addEventListener('click',()=>{document.body.classList.remove('bulk-mode');window.print()});
 $('bulkPrintBtn').addEventListener('click',printFourUp);
