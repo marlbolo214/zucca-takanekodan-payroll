@@ -450,7 +450,7 @@ async function loadCloud(){
   $('syncStatus').textContent='クラウドから読み込み中…';
   try{
     [attendance,staffRows]=await Promise.all([
-      api('/rest/v1/attendance?select=staff_name,work_date,punch_type,punch_time,position,id&order=work_date.asc,position.asc,id.asc'),
+      api('/rest/v1/attendance?select=staff_name,work_date,punch_type,punch_time,position,id,transport_cost&order=work_date.asc,position.asc,id.asc'),
       api('/rest/v1/staff_members?select=name,active,sort_order,hourly_wage,transport_per_day&active=eq.true&order=sort_order.asc,name.asc')
     ]);
     fillStaff();
@@ -470,8 +470,13 @@ function fillStaff(){
 
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 
+function dailyTransportCost(rows){
+  const saved=(rows||[]).find(r=>r.transport_cost!=null);
+  return saved ? Math.max(0,Number(saved.transport_cost)||0) : 0;
+}
+
 function summarize(name){
-  let staff=staffRows.find(s=>s.name===name)||{hourly_wage:0,transport_per_day:0};
+  let staff=staffRows.find(s=>s.name===name)||{hourly_wage:0};
   let [start,end]=periodFromMonth($('periodMonth').value);
   let daily=[],tot=[0,0,0,0],days=0;
 
@@ -482,21 +487,21 @@ function summarize(name){
     if(rows.some(r=>r.punch_type==='出勤'))days++;
     let c=calc(rows);
     c.forEach((v,i)=>{if(v!=null)tot[i]+=v});
-    daily.push({date,calc:c,span:workSpan(rows),issue:punchIssueLabel(rows)});
+    daily.push({date,calc:c,span:workSpan(rows),issue:punchIssueLabel(rows),transport:dailyTransportCost(rows)});
   }
 
-  let wage=Number(staff.hourly_wage||0),transportPerDay=Number(staff.transport_per_day||0);
+  let wage=Number(staff.hourly_wage||0);
   let base=tot[0]/60*wage;
   let otPremium=tot[2]/60*wage*.25;
   let nightPremium=tot[3]/60*wage*.25;
-  let transport=days*transportPerDay;
+  let transport=daily.reduce((sum,d)=>sum+d.transport,0);
   let total=base+otPremium+nightPremium+transport;
   let taxCfg=taxSettingFor(name);
   let taxable=Math.max(0,total-transport);
   let withholding=withholdingTax2026(taxable,taxCfg.taxClass,taxCfg.dependents);
   let net=Math.max(0,total-withholding);
 
-  return {name,staff,start,end,daily,days,tot,wage,transportPerDay,base,otPremium,nightPremium,transport,total,
+  return {name,staff,start,end,daily,days,tot,wage,base,otPremium,nightPremium,transport,total,
     taxable,withholding,net,taxClass:taxCfg.taxClass,dependents:taxCfg.dependents};
 }
 
@@ -527,10 +532,6 @@ function render(){
 
   $('dailyBody').innerHTML=s.daily.map(d=>{
     let c=d.calc;
-    let dailyBase=(c[0]||0)/60*s.wage;
-    let dailyOt=(c[2]||0)/60*s.wage*.25;
-    let dailyNight=(c[3]||0)/60*s.wage*.25;
-    let dayPay=dailyBase+dailyOt+dailyNight+s.transportPerDay;
     return '<tr><td>'+d.date.slice(5).replace('-','/')+'</td><td>'+(d.issue?'<span class="dailyWarn">'+esc(d.issue)+'</span>':esc(d.span))+'</td><td>'+fmt(c[0])+'</td><td>'+fmt(c[1])+'</td><td>'+fmt(c[2])+'</td><td>'+fmt(c[3])+'</td></tr>';
   }).join('')||'<tr><td colspan="6">この期間の勤怠はありません</td></tr>';
 
@@ -585,7 +586,7 @@ function bulkSlipHTML(s){
       '<tr><td>基本分（実働×時給）</td><td>'+yen(s.base)+'</td></tr>'+
       '<tr><td>残業割増（+25%）</td><td>'+yen(s.otPremium)+'</td></tr>'+
       '<tr><td>深夜割増（+25%）</td><td>'+yen(s.nightPremium)+'</td></tr>'+
-      '<tr><td>交通費（'+s.days+'日 × '+yen(s.transportPerDay)+'）</td><td>'+yen(s.transport)+'</td></tr>'+
+      '<tr><td>交通費（日別合計）</td><td>'+yen(s.transport)+'</td></tr>'+
       '<tr><td>支給額</td><td>'+yen(s.total)+'</td></tr>'+
       '<tr><td>源泉所得税（'+(s.taxClass==='otsu'?'乙欄':'甲欄・扶養'+s.dependents+'人')+'）</td><td>▲'+yen(s.withholding)+'</td></tr>'+
       '<tr><td>差引支給額</td><td>'+yen(s.net)+'</td></tr>'+
